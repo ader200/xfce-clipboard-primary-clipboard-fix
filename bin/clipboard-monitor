@@ -1,0 +1,321 @@
+#!/bin/bash
+
+# Clipboard Monitor & Visualizer for Linux Mint
+# Monitoriza cambios en el portapapeles en tiempo real
+
+set -euo pipefail
+
+# Colores
+ROJO='\033[0;31m'
+VERDE='\033[0;32m'
+AZUL='\033[0;34m'
+AMARILLO='\033[1;33m'
+CYAN='\033[0;36m'
+BLANCO='\033[1;37m'
+NC='\033[0m'
+
+# Variables de estado
+PRIMARY_HASH=""
+CLIPBOARD_HASH=""
+REFRESH_INTERVAL=1
+AUTO_MONITOR=false
+
+obtener_hash() {
+    local content
+    content=$1
+    echo "$content" | md5sum | cut -d' ' -f1
+}
+
+obtener_contenido() {
+    local selection=$1
+    if command -v xclip &> /dev/null; then
+        xclip -o -selection "$selection" 2>/dev/null || echo ""
+    elif command -v xsel &> /dev/null; then
+        case "$selection" in
+            primary) xsel --primary 2>/dev/null || echo "" ;;
+            clipboard) xsel --clipboard 2>/dev/null || echo "" ;;
+            secondary) xsel --secondary 2>/dev/null || echo "" ;;
+        esac
+    else
+        echo ""
+    fi
+}
+
+mostrar_cabecera() {
+    clear
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║           MONITOR DE PORTAPAPELES - LINUX MINT                     ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+mostrar_estado() {
+    local primary_content clipboard_content secondary_content
+    primary_content=$(obtener_contenido "primary")
+    clipboard_content=$(obtener_contenido "clipboard")
+    secondary_content=$(obtener_contenido "secondary")
+
+    local primary_new_hash clipboard_new_hash
+    primary_new_hash=$(obtener_hash "$primary_content")
+    clipboard_new_hash=$(obtener_hash "$clipboard_content")
+
+    local changed=""
+    local changed_text="${VERDE}[ACTUALIZADO]${NC}"
+
+    if [ "$PRIMARY_HASH" != "$primary_new_hash" ] && [ -n "$PRIMARY_HASH" ]; then
+        changed="$changed_text"
+    fi
+    if [ "$CLIPBOARD_HASH" != "$clipboard_new_hash" ] && [ -n "$CLIPBOARD_HASH" ]; then
+        [ -n "$changed" ] && changed="$changed\n"
+        changed="${changed}$changed_text"
+    fi
+
+    PRIMARY_HASH="$primary_new_hash"
+    CLIPBOARD_HASH="$clipboard_new_hash"
+
+    echo -e "${AMARILLO}┌─ ESTADO ACTUAL${NC} $([ -n "$changed" ] && echo -e "${VERDE}[¡CAMBIO DETECTADO!]${NC}")"
+    echo -e "${AMARILLO}├────────────────────────────────────────${NC}"
+    echo -e "${AMARILLO}│${NC} Hora: $(date '+%H:%M:%S')"
+    if $AUTO_MONITOR; then
+        echo -e "${AMARILLO}│${NC} Modo: ${VERDE}MONITOREO ACTIVO${NC} (Intervalo: ${REFRESH_INTERVAL}s)"
+    else
+        echo -e "${AMARILLO}│${NC} Modo: ${AMARILLO}VISUALIZACIÓN${NC}"
+    fi
+    echo -e "${AMARILLO}│${NC}"
+    echo -e "${AMARILLO}└────────────────────────────────────────${NC}"
+    echo ""
+
+    echo -e "${AZUL}┌─ PRIMARY (Selección)${NC} $([ "$PRIMARY_HASH" != "$primary_new_hash" ] && echo -e "${VERDE}↓${NC}")"
+    echo -e "${AZUL}├────────────────────────────────────────${NC}"
+    if [ -n "$primary_content" ]; then
+        local display_content
+        display_content=$(echo "$primary_content" | head -c 150)
+        [ ${#primary_content} -gt 150 ] && display_content="$display_content..."
+        display_content=$(echo "$display_content" | tr '\n\t' ' ')
+        echo -e "${AZUL}│${NC} $display_content"
+    else
+        echo -e "${AZUL}│${NC} ${AMARILLO}<Vacío>${NC}"
+    fi
+    echo -e "${AZUL}└────────────────────────────────────────${NC}"
+    echo ""
+
+    echo -e "${VERDE}┌─ CLIPBOARD (Ctrl+C/V)${NC} $([ "$CLIPBOARD_HASH" != "$clipboard_new_hash" ] && echo -e "${VERDE}↓${NC}")"
+    echo -e "${VERDE}├────────────────────────────────────────${NC}"
+    if [ -n "$clipboard_content" ]; then
+        local display_content
+        display_content=$(echo "$clipboard_content" | head -c 150)
+        [ ${#clipboard_content} -gt 150 ] && display_content="$display_content..."
+        display_content=$(echo "$display_content" | tr '\n\t' ' ')
+        echo -e "${VERDE}│${NC} $display_content"
+    else
+        echo -e "${VERDE}│${NC} ${AMARILLO}<Vacío>${NC}"
+    fi
+    echo -e "${VERDE}└────────────────────────────────────────${NC}"
+    echo ""
+}
+
+mostrar_menu() {
+    echo -e "${CYAN}┌─ MENÚ${NC}"
+    echo -e "${CYAN}├────────────────────────────────────────${NC}"
+    echo -e "${CYAN}│${NC}  1) Iniciar monitoreo automático"
+    echo -e "${CYAN}│${NC}  2) Detener monitoreo"
+    echo -e "${CYAN}│${NC}  3) Cambiar intervalo (actual: ${REFRESH_INTERVAL}s)"
+    echo -e "${CYAN}│${NC}  4) Copiar PRIMARY → CLIPBOARD"
+    echo -e "${CYAN}│${NC}  5) Copiar CLIPBOARD → PRIMARY"
+    echo -e "${CYAN}│${NC}  6) Copiar texto personalizado"
+    echo -e "${CYAN}│${NC}  7) Forzar refresco"
+    echo -e "${CYAN}│${NC}  8) Ver historial (gestores instalados)"
+    echo -e "${CYAN}│${NC}  9) Ver guía completa"
+    echo -e "${CYAN}│${NC}  q) Salir"
+    echo -e "${CYAN}└────────────────────────────────────────${NC}"
+    echo ""
+}
+
+monitoreo_automatico() {
+    local option=$1
+    case $option in
+        1)
+            if $AUTO_MONITOR; then
+                echo -e "${AMARILLO}Ya estás en modo monitoreo${NC}"
+            else
+                AUTO_MONITOR=true
+                echo -e "${VERDE}Monitoreo iniciado. Presiona Ctrl+C para detener${NC}"
+                echo -e "${AMARILLO}O usa el menú (opción 2) para salir del modo monitoreo${NC}"
+                sleep 2
+            fi
+            ;;
+        2)
+            AUTO_MONITOR=false
+            echo -e "${AMARILLO}Monitoreo detenido${NC}"
+            sleep 1
+            ;;
+    esac
+}
+
+bucle_monitoreo() {
+    while $AUTO_MONITOR; do
+        clear
+        mostrar_cabecera
+        mostrar_estado
+        echo ""
+        echo -e "${AMARILLO}Presiona 'q' + Enter para salir del monitoreo...${NC}"
+        sleep "$REFRESH_INTERVAL"
+
+        # Verificar si se presionó q
+        if read -t 0.1 -n 1 key 2>/dev/null; then
+            if [[ $key == 'q' || $key == 'Q' ]]; then
+                AUTO_MONITOR=false
+                break
+            fi
+        fi
+    done
+}
+
+cambiar_intervalo() {
+    echo ""
+    echo -n "Nuevo intervalo en segundos (1-10): "
+    read -r nuevo_intervalo
+    if [[ "$nuevo_intervalo" =~ ^[0-9]+$ ]] && [ "$nuevo_intervalo" -ge 1 ] && [ "$nuevo_intervalo" -le 10 ]; then
+        REFRESH_INTERVAL="$nuevo_intervalo"
+        echo -e "${VERDE}Intervalo cambiado a ${REFRESH_INTERVAL}s${NC}"
+    else
+        echo -e "${ROJO}Intervalo inválido. Usando valor actual.${NC}"
+    fi
+    sleep 1
+}
+
+copiar_entre_clipboards() {
+    local desde=$1
+    local hacia=$2
+    local contenido
+    contenido=$(obtener_contenido "$desde")
+
+    if [ -n "$contenido" ]; then
+        echo "$contenido" | xclip -selection "$hacia" 2>/dev/null || \
+        echo "$contenido" | xsel --$hacia 2>/dev/null
+        echo -e "${VERDE}Copiado de $desde → $hacia${NC}"
+    else
+        echo -e "${ROJO}El portapapeles $desde está vacío${NC}"
+    fi
+    sleep 1
+}
+
+copiar_personalizado() {
+    echo ""
+    echo -n "Texto a copiar: "
+    read -r texto
+    echo ""
+    echo "1) PRIMARY  2) CLIPBOARD  3) SECONDARY"
+    echo -n "Elige destino: "
+    read -r destino
+    case $destino in
+        1) echo "$texto" | xclip -selection primary ;;
+        2) echo "$texto" | xclip -selection clipboard ;;
+        3) echo "$texto" | xclip -selection secondary ;;
+    esac
+    echo -e "${VERDE}Copiado${NC}"
+    sleep 1
+}
+
+ver_historial() {
+    echo ""
+    echo -e "${VERDE}GESTORES DE PORTAPAPELES:${NC}"
+    echo ""
+
+    declare -A gestores_info=(
+        ["copyq"]="Gestor avanzado con historial, búsqueda y etiquetas"
+        ["parcellite"]="Gestor ligero con historial básico"
+        ["clipit"]="Gestor simple para XFCE"
+        ["glipper"]="Gestor con plugin para GNOME"
+        ["diodon"]="Gestor ligero para Unity/GTK"
+    )
+
+    for gesto in "${!gestores_info[@]}"; do
+        if command -v "$gesto" &> /dev/null; then
+            echo -e "${VERDE}✓${NC} $gesto - ${gestores_info[$gesto]}"
+        else
+            echo -e "${ROJO}✗${NC} $gesto - ${gestores_info[$gesto]}"
+        fi
+    done
+
+    echo ""
+    echo -e "${AMARILLO}INSTALAR GESTOR:${NC}"
+    echo "  sudo apt install copyq      # Recomendado"
+    echo "  sudo apt install parcellite # Ligero"
+    echo "  sudo apt install clipit     # XFCE"
+    echo ""
+
+    echo -e "${CYAN}LUGAR DEL HISTORIAL:${NC}"
+    echo "  • Cinnamon: ~/.config/cinnamon/spices/clipboard@linuxmint/"
+    echo "  • CopyQ: ~/.config/copyq/"
+    echo "  • Parcellite: ~/.parcellite/"
+    echo ""
+
+    read -p "Presiona Enter para continuar..."
+}
+
+ver_guia() {
+    if command -v less &> /dev/null; then
+        less /home/gods/Escritorio/GUIA_PORTAPAPELES.md
+    else
+        cat /home/gods/Escritorio/GUIA_PORTAPAPELES.md
+        read -p "Presiona Enter para continuar..."
+    fi
+}
+
+# Verificar dependencias
+verificar_dependencias() {
+    if ! command -v xclip &> /dev/null && ! command -v xsel &> /dev/null; then
+        echo -e "${ROJO}ERROR: Se requiere xclip o xsel${NC}"
+        echo -e "${AMARILLO}Instalando xclip...${NC}"
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get install -y xclip
+        else
+            exit 1
+        fi
+    fi
+}
+
+# Programa principal
+main() {
+    verificar_dependencias
+
+    # Inicializar hashes
+    PRIMARY_HASH=$(obtener_hash "$(obtener_contenido primary)")
+    CLIPBOARD_HASH=$(obtener_hash "$(obtener_contenido clipboard)")
+
+    while true; do
+        if $AUTO_MONITOR; then
+            bucle_monitoreo
+        else
+            mostrar_cabecera
+            mostrar_estado
+            mostrar_menu
+            echo -n -e "${CYAN}Opción: ${NC}"
+            read -r opcion
+
+            case $opcion in
+                1) monitoreo_automatico 1 ;;
+                2) monitoreo_automatico 2 ;;
+                3) cambiar_intervalo ;;
+                4) copiar_entre_clipboards "primary" "clipboard" ;;
+                5) copiar_entre_clipboards "clipboard" "primary" ;;
+                6) copiar_personalizado ;;
+                7) PRIMARY_HASH="" && CLIPBOARD_HASH="" ;;
+                8) ver_historial ;;
+                9) ver_guia ;;
+                q|Q)
+                    echo ""
+                    echo -e "${VERDE}¡Hasta luego!${NC}"
+                    exit 0
+                    ;;
+                *)
+                    echo -e "${ROJO}Opción inválida${NC}"
+                    sleep 1
+                    ;;
+            esac
+        fi
+    done
+}
+
+main
